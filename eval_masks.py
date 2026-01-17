@@ -10,7 +10,7 @@ import numpy as np
 import pyilt.evaluation as evaluation
 import pylitho.exact as lithosim
 
-MASK_RE = re.compile(r"^metalSet_levelsetILT_cell(?P<idx>\d+)_s=(?P<s>\d+\.\d+)\.png$")
+MASK_RE = re.compile(r"^metalSet_pixelILT_cell(?P<idx>\d+)_s=(?P<s>\d+\.\d+)\.png$")
 
 
 def parse_args():
@@ -34,7 +34,7 @@ def parse_args():
     )
     parser.add_argument(
         "--glob",
-        default="metalSet_levelsetILT_cell*_s=*.png",
+        default="metalSet_pixelILT_cell*_s=*.png",
         help="Glob pattern used when masks are not provided.",
     )
     parser.add_argument(
