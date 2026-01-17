@@ -60,6 +60,18 @@ def parse_args():
         default=128,
         help="Subwindow size per axis (default: 128).",
     )
+    parser.add_argument(
+        "--low-percent",
+        type=float,
+        default=1.0,
+        help="Low cumulative percent for indicator lines (default: 1).",
+    )
+    parser.add_argument(
+        "--high-percent",
+        type=float,
+        default=99.0,
+        help="High cumulative percent for indicator lines (default: 99).",
+    )
     return parser.parse_args()
 
 
@@ -106,29 +118,119 @@ def main():
         return
 
     if y_counts:
+        if not (0.0 < args.low_percent < args.high_percent < 100.0):
+            print("low-percent and high-percent must satisfy 0 < low < high < 100.")
+            return
+        low_cut = args.low_percent / 100.0
+        high_cut = args.high_percent / 100.0
+
         y_freq = Counter(y_counts.values())
         xs = sorted(y_freq.keys())
         ys = [y_freq[x] for x in xs]
+        total = sum(ys)
+        cum = 0
+        k01 = None
+        k10 = None
+        k90 = None
+        k99 = None
+        for x_val, y_val in zip(xs, ys):
+            cum += y_val
+            if k01 is None and cum >= low_cut * total:
+                k01 = x_val
+            if k10 is None and cum >= 0.10 * total:
+                k10 = x_val
+            if k90 is None and cum >= 0.90 * total:
+                k90 = x_val
+            if k99 is None and cum >= high_cut * total:
+                k99 = x_val
+                break
 
         plt.figure(figsize=(8, 4))
         plt.bar(xs, ys)
+        if k01 is not None:
+            plt.axvline(
+                k01,
+                color="tab:purple",
+                linestyle="--",
+                linewidth=1,
+                label=f"{args.low_percent:g}%",
+            )
+        if k10 is not None:
+            plt.axvline(k10, color="tab:orange", linestyle="--", linewidth=1, label="10%")
+        if k90 is not None:
+            plt.axvline(k90, color="tab:green", linestyle="--", linewidth=1, label="90%")
+        if k99 is not None:
+            plt.axvline(
+                k99,
+                color="tab:red",
+                linestyle="--",
+                linewidth=1,
+                label=f"{args.high_percent:g}%",
+            )
         plt.xlabel("K[y] (count per y)")
         plt.ylabel("Frequency of K[y]")
         plt.title("Frequency of K[y] Values")
+        if k01 is not None or k10 is not None or k90 is not None or k99 is not None:
+            plt.legend()
         plt.tight_layout()
         plt.savefig(args.output, dpi=150)
         print(f"Saved plot to {args.output}")
 
     if x_counts:
+        if not (0.0 < args.low_percent < args.high_percent < 100.0):
+            print("low-percent and high-percent must satisfy 0 < low < high < 100.")
+            return
+        low_cut = args.low_percent / 100.0
+        high_cut = args.high_percent / 100.0
+
         x_freq = Counter(x_counts.values())
         xs = sorted(x_freq.keys())
         ys = [x_freq[x] for x in xs]
+        total = sum(ys)
+        cum = 0
+        k01 = None
+        k10 = None
+        k90 = None
+        k99 = None
+        for x_val, y_val in zip(xs, ys):
+            cum += y_val
+            if k01 is None and cum >= low_cut * total:
+                k01 = x_val
+            if k10 is None and cum >= 0.10 * total:
+                k10 = x_val
+            if k90 is None and cum >= 0.90 * total:
+                k90 = x_val
+            if k99 is None and cum >= high_cut * total:
+                k99 = x_val
+                break
 
         plt.figure(figsize=(8, 4))
         plt.bar(xs, ys)
+        if k01 is not None:
+            plt.axvline(
+                k01,
+                color="tab:purple",
+                linestyle="--",
+                linewidth=1,
+                label=f"{args.low_percent:g}%",
+            )
+        if k10 is not None:
+            plt.axvline(k10, color="tab:orange", linestyle="--", linewidth=1, label="10%")
+        if k90 is not None:
+            plt.axvline(k90, color="tab:green", linestyle="--", linewidth=1, label="90%")
+        if k99 is not None:
+            plt.axvline(
+                k99,
+                color="tab:red",
+                linestyle="--",
+                linewidth=1,
+                label=f"{args.high_percent:g}%",
+            )
         plt.xlabel("K[x] (count per x)")
         plt.ylabel("Frequency of K[x]")
         plt.title("Frequency of K[x] Values")
+        if k01 is not None or k10 is not None or k90 is not None or k99 is not None:
+            plt.legend()
         plt.tight_layout()
         plt.savefig(args.x_output, dpi=150)
         print(f"Saved plot to {args.x_output}")
