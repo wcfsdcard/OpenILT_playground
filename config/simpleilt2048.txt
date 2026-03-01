@@ -1,4 +1,4 @@
-Iterations 20
+Iterations 130
 TargetDensity 0.225
 SigmoidSteepness 4.0
 WeightEPE 0.5
