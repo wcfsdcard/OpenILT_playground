@@ -62,16 +62,19 @@ class SimpleCfg:
         self._config.setdefault("MoreauBeta", 0.1)
         self._config.setdefault("MoreauLambdaDecay", 1.0)
         self._config.setdefault("MoreauLambdaMin", self._config["MoreauLambda"])
-        intfields = ["Iterations", "TileSizeX", "TileSizeY", "OffsetX", "OffsetY", "ILTSizeX", "ILTSizeY"]
+        self._config.setdefault("MoreauRandomInitZ", 0)
+        self._config.setdefault("MoreauRandomInitZStd", 1.0)
+        intfields = ["Iterations", "TileSizeX", "TileSizeY", "OffsetX", "OffsetY", "ILTSizeX", "ILTSizeY", "MoreauRandomInitZ"]
         for key in intfields:
             self._config[key] = int(self._config[key])
         floatfields = ["TargetDensity", "SigmoidSteepness", "WeightEPE", "WeightPVBand", "WeightPVBL2", "StepSize",
-                       "MoreauLambda", "MoreauBeta", "MoreauLambdaDecay", "MoreauLambdaMin"]
+                       "MoreauLambda", "MoreauBeta", "MoreauLambdaDecay", "MoreauLambdaMin", "MoreauRandomInitZStd"]
         for key in floatfields:
             self._config[key] = float(self._config[key])
         assert self._config["MoreauLambda"] > 0.0, "[SimpleILT]: MoreauLambda must be positive."
         assert self._config["MoreauLambdaDecay"] > 0.0, "[SimpleILT]: MoreauLambdaDecay must be positive."
         assert self._config["MoreauLambdaMin"] > 0.0, "[SimpleILT]: MoreauLambdaMin must be positive."
+        assert self._config["MoreauRandomInitZStd"] >= 0.0, "[SimpleILT]: MoreauRandomInitZStd must be non-negative."
 
     def __getitem__(self, key):
         return self._config[key]
@@ -136,7 +139,11 @@ class SimpleILT:
         moreau_lambda = self._config["MoreauLambda"]
         moreau_beta = self._config["MoreauBeta"]
         u = params.clone().detach().requires_grad_(True)
-        z = params.clone().detach()
+        if self._config["MoreauRandomInitZ"]:
+            z = params.clone().detach() + self._config["MoreauRandomInitZStd"] * torch.randn_like(params)
+        else:
+            # z = params.clone().detach()
+            z = 0.5*torch.ones_like(params)
 
         # Optimizer
         opt = optim.SGD([u], lr=self._config["StepSize"])
@@ -281,7 +288,7 @@ def serial():
         target, params = initializer.PixelInit().run(design, cfg["TileSizeX"], cfg["TileSizeY"], cfg["OffsetX"], cfg["OffsetY"])
 
         begin = time.time()
-        l2, pvb, bestParams, bestMask, history = solver.solve(target, params, curv=None, record_history=True)
+        l2, pvb, bestParams, bestMask, history = solver.solve(target, params, curv=True, record_history=True)
         runtime = time.time() - begin
         sample_name = f"M1_test{idx}"
         save_convergence_plot(history, sample_name)
