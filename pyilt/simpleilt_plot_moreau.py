@@ -17,6 +17,7 @@ import pylitho.simple as lithosim
 
 import pyilt.initializer as initializer
 
+
 def ensure_dir(path):
     os.makedirs(path, exist_ok=True)
 
@@ -30,18 +31,19 @@ def save_convergence_plot(history, sample_name, output_dir="./plots"):
     iterations = range(len(history["total"]))
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.plot(iterations, history["total"], label="total")
-    ax.plot(iterations, history["l2"], label="l2")
-    ax.plot(iterations, history["weighted_pvbl2"], label="weighted_pvbl2")
-    ax.plot(iterations, history["weighted_pvbloss"], label="weighted_pvbloss")
-    if "weighted_curv" in history:
-        ax.plot(iterations, history["weighted_curv"], label="weighted_curv")
-    ax.set_title(f"{sample_name} convergence")
+    ax.plot(iterations, history["u_l2"], label="u_l2")
+    ax.plot(iterations, history["u_weighted_pvbl2"], label="u_weighted_pvbl2")
+    ax.plot(iterations, history["u_weighted_pvbloss"], label="u_weighted_pvbloss")
+    ax.plot(iterations, history["moreau_coupling"], label="moreau_coupling")
+    if "u_weighted_curv" in history:
+        ax.plot(iterations, history["u_weighted_curv"], label="u_weighted_curv")
+    ax.set_title(f"{sample_name} moreau convergence")
     ax.set_xlabel("iteration")
     ax.set_ylabel("loss")
     ax.grid(True)
     ax.legend()
     fig.tight_layout()
-    fig.savefig(os.path.join(output_dir, f"{sample_name}_convergence.png"))
+    fig.savefig(os.path.join(output_dir, f"{sample_name}_moreau_convergence.png"))
     plt.close(fig)
 
 
@@ -56,10 +58,13 @@ class SimpleCfg:
                     "TileSizeX", "TileSizeY", "OffsetX", "OffsetY", "ILTSizeX", "ILTSizeY"]
         for key in required:
             assert key in self._config, f"[SimpleILT]: Cannot find the config {key}."
+        self._config.setdefault("MoreauLambda", 5.0)
+        self._config.setdefault("MoreauBeta", 0.1)
         intfields = ["Iterations", "TileSizeX", "TileSizeY", "OffsetX", "OffsetY", "ILTSizeX", "ILTSizeY"]
         for key in intfields:
             self._config[key] = int(self._config[key])
-        floatfields = ["TargetDensity", "SigmoidSteepness", "WeightEPE", "WeightPVBand", "WeightPVBL2", "StepSize"]
+        floatfields = ["TargetDensity", "SigmoidSteepness", "WeightEPE", "WeightPVBand", "WeightPVBL2", "StepSize",
+                       "MoreauLambda", "MoreauBeta"]
         for key in floatfields:
             self._config[key] = float(self._config[key])
 
@@ -81,76 +86,104 @@ class SimpleILT:
         self._filter[self._config["OffsetX"]:self._config["OffsetX"]+self._config["ILTSizeX"],
                      self._config["OffsetY"]:self._config["OffsetY"]+self._config["ILTSizeY"]] = 1
 
+    def _mask_from_logits(self, logits):
+        return torch.sigmoid(self._config["SigmoidSteepness"] * logits) * self._filter
+
+    def _base_objective(self, mask, target, curv=None):
+        printedNom, printedMax, printedMin = self._lithosim(mask)
+        l2loss = func.mse_loss(printedNom, target, reduction="sum")
+        pvbl2 = func.mse_loss(printedMax, target, reduction="sum") + func.mse_loss(printedMin, target, reduction="sum")
+        pvbloss = func.mse_loss(printedMax, printedMin, reduction="sum")
+        pvband = torch.sum((printedMax >= self._config["TargetDensity"]) != (printedMin >= self._config["TargetDensity"]))
+        weighted_pvbl2 = self._config["WeightPVBL2"] * pvbl2
+        weighted_pvbloss = self._config["WeightPVBand"] * pvbloss
+        weighted_curv = None
+        base_total = l2loss + weighted_pvbl2 + weighted_pvbloss
+        if curv is not None:
+            kernelCurv = torch.tensor(
+                [[-1.0 / 16, 5.0 / 16, -1.0 / 16], [5.0 / 16, -1.0, 5.0 / 16], [-1.0 / 16, 5.0 / 16, -1.0 / 16]],
+                dtype=REALTYPE,
+                device=DEVICE,
+            )
+            if mask.dim() == 2:
+                mask4d = mask[None, None, :, :]
+            else:
+                mask4d = mask[:, None, :, :]
+            curvature = func.conv2d(mask4d, kernelCurv[None, None, :, :])[:, 0]
+            losscurv = func.mse_loss(curvature, torch.zeros_like(curvature), reduction="sum")
+            weighted_curv = curv * losscurv
+            base_total += weighted_curv
+        return {
+            "l2loss": l2loss,
+            "weighted_pvbl2": weighted_pvbl2,
+            "weighted_pvbloss": weighted_pvbloss,
+            "weighted_curv": weighted_curv,
+            "pvband": pvband,
+            "base_total": base_total,
+        }
+
     def solve(self, target, params, curv=None, verbose=0, record_history=False):
         # Initialize
         if not isinstance(target, torch.Tensor):
             target = torch.tensor(target, dtype=REALTYPE, device=self._device)
         if not isinstance(params, torch.Tensor):
             params = torch.tensor(params, dtype=REALTYPE, device=self._device)
-        backup = params
-        params = params.clone().detach().requires_grad_(True)
+        moreau_lambda = self._config["MoreauLambda"]
+        moreau_beta = self._config["MoreauBeta"]
+        u = params.clone().detach().requires_grad_(True)
+        z = params.clone().detach()
 
         # Optimizer
-        opt = optim.SGD([params], lr=self._config["StepSize"])
-        # opt = optim.Adam([params], lr=self._config["StepSize"])
+        opt = optim.SGD([u], lr=self._config["StepSize"])
+        # opt = optim.Adam([u], lr=self._config["StepSize"])
 
         history = None
         if record_history:
             history = {
                 "total": [],
-                "l2": [],
-                "weighted_pvbl2": [],
-                "weighted_pvbloss": [],
+                "u_l2": [],
+                "u_weighted_pvbl2": [],
+                "u_weighted_pvbloss": [],
+                "moreau_coupling": [],
+                "u_z_distance": [],
             }
             if curv is not None:
-                history["weighted_curv"] = []
+                history["u_weighted_curv"] = []
 
         # Optimization process
-        lossMin, l2Min, pvbMin = 1e12, 1e12, 1e12
-        bestParams = None
-        bestMask = None
-        offset = 0 # offset for initial params
         for idx in range(self._config["Iterations"]):
-            mask = torch.sigmoid(self._config["SigmoidSteepness"] * (params-offset)) * self._filter
-            # mask += torch.sigmoid(self._config["SigmoidSteepness"] * (backup-offset)) * (1.0 - self._filter)
-            printedNom, printedMax, printedMin = self._lithosim(mask)
-            l2loss = func.mse_loss(printedNom, target, reduction="sum")
-            pvbl2 = func.mse_loss(printedMax, target, reduction="sum") + func.mse_loss(printedMin, target, reduction="sum")
-            pvbloss = func.mse_loss(printedMax, printedMin, reduction="sum")
-            pvband = torch.sum((printedMax >= self._config["TargetDensity"]) != (printedMin >= self._config["TargetDensity"]))
-            weighted_pvbl2 = self._config["WeightPVBL2"] * pvbl2
-            weighted_pvbloss = self._config["WeightPVBand"] * pvbloss
-            loss = l2loss + weighted_pvbl2 + weighted_pvbloss
-            weighted_curv = None
-            if curv is not None:
-                kernelCurv = torch.tensor([[-1.0/16, 5.0/16, -1.0/16], [5.0/16, -1.0, 5.0/16], [-1.0/16, 5.0/16, -1.0/16]], dtype=REALTYPE, device=DEVICE)
-                curvature = func.conv2d(mask[None, None, :, :], kernelCurv[None, None, :, :])[0, 0]
-                losscurv = func.mse_loss(curvature, torch.zeros_like(curvature), reduction="sum")
-                weighted_curv = curv * losscurv
-                loss += weighted_curv
+            mask_u = self._mask_from_logits(u)
+            objective_u = self._base_objective(mask_u, target, curv=curv)
+            moreau_coupling = 0.5 / moreau_lambda * torch.sum((u - z.detach()) ** 2)
+            total_loss = objective_u["base_total"] + moreau_coupling
             if verbose == 1:
-                print(f"[Iteration {idx}]: L2 = {l2loss.item():.0f}; PVBand: {pvband.item():.0f}")
+                print(f"[Iteration {idx}]: L2 = {objective_u['l2loss'].item():.0f}; PVBand: {objective_u['pvband'].item():.0f}")
 
             if history is not None:
-                history["total"].append(loss.item())
-                history["l2"].append(l2loss.item())
-                history["weighted_pvbl2"].append(weighted_pvbl2.item())
-                history["weighted_pvbloss"].append(weighted_pvbloss.item())
-                if weighted_curv is not None:
-                    history["weighted_curv"].append(weighted_curv.item())
-
-            if bestParams is None or bestMask is None or loss.item() < lossMin:
-                lossMin, l2Min, pvbMin = loss.item(), l2loss.item(), pvband.item()
-                bestParams = params.detach().clone()
-                bestMask = mask.detach().clone()
+                history["total"].append(total_loss.item())
+                history["u_l2"].append(objective_u["l2loss"].item())
+                history["u_weighted_pvbl2"].append(objective_u["weighted_pvbl2"].item())
+                history["u_weighted_pvbloss"].append(objective_u["weighted_pvbloss"].item())
+                history["moreau_coupling"].append(moreau_coupling.item())
+                if objective_u["weighted_curv"] is not None:
+                    history["u_weighted_curv"].append(objective_u["weighted_curv"].item())
 
             opt.zero_grad()
-            loss.backward()
+            total_loss.backward()
             opt.step()
+            with torch.no_grad():
+                z = (1.0 - moreau_beta) * z + moreau_beta * u.detach()
+                if history is not None:
+                    history["u_z_distance"].append(torch.norm(u.detach() - z).item())
 
+        final_params = z.detach().clone()
+        final_mask = self._mask_from_logits(final_params).detach().clone()
+        final_objective = self._base_objective(final_mask, target, curv=curv)
+        l2_value = final_objective["l2loss"].item()
+        pvb_value = final_objective["pvband"].item()
         if history is not None:
-            return l2Min, pvbMin, bestParams, bestMask, history
-        return l2Min, pvbMin, bestParams, bestMask
+            return l2_value, pvb_value, final_params, final_mask, history
+        return l2_value, pvb_value, final_params, final_mask
 
 
 def parallel():
@@ -231,7 +264,7 @@ def serial():
         target, params = initializer.PixelInit().run(design, cfg["TileSizeX"], cfg["TileSizeY"], cfg["OffsetX"], cfg["OffsetY"])
 
         begin = time.time()
-        l2, pvb, bestParams, bestMask, history = solver.solve(target, params, curv=None, record_history=True)
+        l2, pvb, finalParams, finalMask, history = solver.solve(target, params, curv=None, record_history=True)
         runtime = time.time() - begin
         sample_name = f"M1_test{idx}"
         save_convergence_plot(history, sample_name)
@@ -239,8 +272,8 @@ def serial():
         ref = glp.Design(f"./benchmark/ICCAD2013/M1_test{idx}.glp", down=1)
         ref.center(cfg["TileSizeX"]*SCALE, cfg["TileSizeY"]*SCALE, cfg["OffsetX"]*SCALE, cfg["OffsetY"]*SCALE)
         target, params = initializer.PixelInit().run(ref, cfg["TileSizeX"]*SCALE, cfg["TileSizeY"]*SCALE, cfg["OffsetX"]*SCALE, cfg["OffsetY"]*SCALE)
-        l2, pvb, epe, shot = evaluation.evaluate(bestMask, target, litho, scale=SCALE, shots=True)
-        cv2.imwrite(f"./tmp/MOSAIC_test{idx}.png", (bestMask * 255).detach().cpu().numpy())
+        l2, pvb, epe, shot = evaluation.evaluate(finalMask, target, litho, scale=SCALE, shots=True)
+        cv2.imwrite(f"./tmp/MOSAIC_moreau_test{idx}.png", (finalMask * 255).detach().cpu().numpy())
 
         print(f"[Testcase {idx}]: L2 {l2:.0f}; PVBand {pvb:.0f}; EPE {epe:.0f}; Shot: {shot:.0f}; SolveTime: {runtime:.2f}s")
 
