@@ -109,9 +109,10 @@ class SimpleILT:
         lossMin, l2Min, pvbMin = 1e12, 1e12, 1e12
         bestParams = None
         bestMask = None
+        offset = 0 # offset for initial params
         for idx in range(self._config["Iterations"]):
-            mask = torch.sigmoid(self._config["SigmoidSteepness"] * params) * self._filter
-            mask += torch.sigmoid(self._config["SigmoidSteepness"] * backup) * (1.0 - self._filter)
+            mask = torch.sigmoid(self._config["SigmoidSteepness"] * (params-offset)) * self._filter
+            # mask += torch.sigmoid(self._config["SigmoidSteepness"] * (backup-offset)) * (1.0 - self._filter)
             printedNom, printedMax, printedMin = self._lithosim(mask)
             l2loss = func.mse_loss(printedNom, target, reduction="sum")
             pvbl2 = func.mse_loss(printedMax, target, reduction="sum") + func.mse_loss(printedMin, target, reduction="sum")
