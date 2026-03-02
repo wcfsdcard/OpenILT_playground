@@ -152,7 +152,7 @@ class CurvILT:
             z = params.clone().detach() + self._config["MoreauRandomInitZStd"] * torch.randn_like(params)
         else:
             z = 0.5*torch.ones_like(params)
-            # z = params.clone().detach()
+            # z = params.clone().detach() - 0.5
 
         # Optimizer
         opt = optim.SGD([u], lr=self._config["StepSize"])
