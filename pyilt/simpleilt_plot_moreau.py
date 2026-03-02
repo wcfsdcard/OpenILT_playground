@@ -60,13 +60,18 @@ class SimpleCfg:
             assert key in self._config, f"[SimpleILT]: Cannot find the config {key}."
         self._config.setdefault("MoreauLambda", 5.0)
         self._config.setdefault("MoreauBeta", 0.1)
+        self._config.setdefault("MoreauLambdaDecay", 1.0)
+        self._config.setdefault("MoreauLambdaMin", self._config["MoreauLambda"])
         intfields = ["Iterations", "TileSizeX", "TileSizeY", "OffsetX", "OffsetY", "ILTSizeX", "ILTSizeY"]
         for key in intfields:
             self._config[key] = int(self._config[key])
         floatfields = ["TargetDensity", "SigmoidSteepness", "WeightEPE", "WeightPVBand", "WeightPVBL2", "StepSize",
-                       "MoreauLambda", "MoreauBeta"]
+                       "MoreauLambda", "MoreauBeta", "MoreauLambdaDecay", "MoreauLambdaMin"]
         for key in floatfields:
             self._config[key] = float(self._config[key])
+        assert self._config["MoreauLambda"] > 0.0, "[SimpleILT]: MoreauLambda must be positive."
+        assert self._config["MoreauLambdaDecay"] > 0.0, "[SimpleILT]: MoreauLambdaDecay must be positive."
+        assert self._config["MoreauLambdaMin"] > 0.0, "[SimpleILT]: MoreauLambdaMin must be positive."
 
     def __getitem__(self, key):
         return self._config[key]
@@ -134,8 +139,8 @@ class SimpleILT:
         z = params.clone().detach()
 
         # Optimizer
-        # opt = optim.SGD([u], lr=self._config["StepSize"])
-        opt = optim.Adam([u], lr=self._config["StepSize"])
+        opt = optim.SGD([u], lr=self._config["StepSize"])
+        # opt = optim.Adam([u], lr=self._config["StepSize"])
 
         history = None
         if record_history:
@@ -145,12 +150,15 @@ class SimpleILT:
                 "u_weighted_pvbl2": [],
                 "u_weighted_pvbloss": [],
                 "moreau_coupling": [],
+                "moreau_lambda": [],
                 "u_z_distance": [],
             }
             if curv is not None:
                 history["u_weighted_curv"] = []
 
         # Optimization process
+        moreau_lambda_decay = self._config["MoreauLambdaDecay"]
+        moreau_lambda_min = self._config["MoreauLambdaMin"]
         best_loss = float("inf")
         best_params = None
         best_mask = None
@@ -170,6 +178,7 @@ class SimpleILT:
                 history["u_weighted_pvbl2"].append(objective_u["weighted_pvbl2"].item())
                 history["u_weighted_pvbloss"].append(objective_u["weighted_pvbloss"].item())
                 history["moreau_coupling"].append(moreau_coupling.item())
+                history["moreau_lambda"].append(moreau_lambda)
                 if objective_u["weighted_curv"] is not None:
                     history["u_weighted_curv"].append(objective_u["weighted_curv"].item())
 
@@ -187,6 +196,7 @@ class SimpleILT:
                 z = (1.0 - moreau_beta) * z + moreau_beta * u.detach()
                 if history is not None:
                     history["u_z_distance"].append(torch.norm(u.detach() - z).item())
+            moreau_lambda = max(moreau_lambda_min, moreau_lambda * moreau_lambda_decay)
 
         if history is not None:
             return best_l2, best_pvb, best_params, best_mask, history
