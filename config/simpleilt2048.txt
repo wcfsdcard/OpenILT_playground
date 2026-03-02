@@ -4,8 +4,8 @@ SigmoidSteepness 4.0
 WeightEPE 0.5
 WeightPVBL2 1.0
 WeightPVBand 0.0
-StepSize 0.5
-MoreauLambda 5.0
+StepSize 0.1
+MoreauLambda 5
 MoreauBeta 0.2
 
 TileSizeX 2048

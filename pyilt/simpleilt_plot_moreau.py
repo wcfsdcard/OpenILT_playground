@@ -134,8 +134,8 @@ class SimpleILT:
         z = params.clone().detach()
 
         # Optimizer
-        opt = optim.SGD([u], lr=self._config["StepSize"])
-        # opt = optim.Adam([u], lr=self._config["StepSize"])
+        # opt = optim.SGD([u], lr=self._config["StepSize"])
+        opt = optim.Adam([u], lr=self._config["StepSize"])
 
         history = None
         if record_history:
@@ -151,6 +151,11 @@ class SimpleILT:
                 history["u_weighted_curv"] = []
 
         # Optimization process
+        best_loss = float("inf")
+        best_params = None
+        best_mask = None
+        best_l2 = None
+        best_pvb = None
         for idx in range(self._config["Iterations"]):
             mask_u = self._mask_from_logits(u)
             objective_u = self._base_objective(mask_u, target, curv=curv)
@@ -168,6 +173,13 @@ class SimpleILT:
                 if objective_u["weighted_curv"] is not None:
                     history["u_weighted_curv"].append(objective_u["weighted_curv"].item())
 
+            if objective_u["base_total"].item() < best_loss:
+                best_loss = objective_u["base_total"].item()
+                best_l2 = objective_u["l2loss"].item()
+                best_pvb = objective_u["pvband"].item()
+                best_params = u.detach().clone()
+                best_mask = mask_u.detach().clone()
+
             opt.zero_grad()
             total_loss.backward()
             opt.step()
@@ -176,14 +188,9 @@ class SimpleILT:
                 if history is not None:
                     history["u_z_distance"].append(torch.norm(u.detach() - z).item())
 
-        final_params = z.detach().clone()
-        final_mask = self._mask_from_logits(final_params).detach().clone()
-        final_objective = self._base_objective(final_mask, target, curv=curv)
-        l2_value = final_objective["l2loss"].item()
-        pvb_value = final_objective["pvband"].item()
         if history is not None:
-            return l2_value, pvb_value, final_params, final_mask, history
-        return l2_value, pvb_value, final_params, final_mask
+            return best_l2, best_pvb, best_params, best_mask, history
+        return best_l2, best_pvb, best_params, best_mask
 
 
 def parallel():
@@ -264,7 +271,7 @@ def serial():
         target, params = initializer.PixelInit().run(design, cfg["TileSizeX"], cfg["TileSizeY"], cfg["OffsetX"], cfg["OffsetY"])
 
         begin = time.time()
-        l2, pvb, finalParams, finalMask, history = solver.solve(target, params, curv=None, record_history=True)
+        l2, pvb, bestParams, bestMask, history = solver.solve(target, params, curv=None, record_history=True)
         runtime = time.time() - begin
         sample_name = f"M1_test{idx}"
         save_convergence_plot(history, sample_name)
@@ -272,8 +279,8 @@ def serial():
         ref = glp.Design(f"./benchmark/ICCAD2013/M1_test{idx}.glp", down=1)
         ref.center(cfg["TileSizeX"]*SCALE, cfg["TileSizeY"]*SCALE, cfg["OffsetX"]*SCALE, cfg["OffsetY"]*SCALE)
         target, params = initializer.PixelInit().run(ref, cfg["TileSizeX"]*SCALE, cfg["TileSizeY"]*SCALE, cfg["OffsetX"]*SCALE, cfg["OffsetY"]*SCALE)
-        l2, pvb, epe, shot = evaluation.evaluate(finalMask, target, litho, scale=SCALE, shots=True)
-        cv2.imwrite(f"./tmp/MOSAIC_moreau_test{idx}.png", (finalMask * 255).detach().cpu().numpy())
+        l2, pvb, epe, shot = evaluation.evaluate(bestMask, target, litho, scale=SCALE, shots=True)
+        cv2.imwrite(f"./tmp/MOSAIC_moreau_test{idx}.png", (bestMask * 255).detach().cpu().numpy())
 
         print(f"[Testcase {idx}]: L2 {l2:.0f}; PVBand {pvb:.0f}; EPE {epe:.0f}; Shot: {shot:.0f}; SolveTime: {runtime:.2f}s")
 
