@@ -65,7 +65,8 @@ class CurvILTCfg:
         self._config.setdefault("MoreauLambdaMin", self._config["MoreauLambda"])
         self._config.setdefault("MoreauRandomInitZ", 0)
         self._config.setdefault("MoreauRandomInitZStd", 1.0)
-        intfields = ["Iterations", "TileSizeX", "TileSizeY", "OffsetX", "OffsetY", "ILTSizeX", "ILTSizeY", "MoreauRandomInitZ"]
+        self._config.setdefault("MoreauK", 1)
+        intfields = ["Iterations", "TileSizeX", "TileSizeY", "OffsetX", "OffsetY", "ILTSizeX", "ILTSizeY", "MoreauRandomInitZ", "MoreauK"]
         for key in intfields:
             self._config[key] = int(self._config[key])
         floatfields = ["TargetDensity", "SigmoidSteepness", "SigmoidOffset", "WeightEPE", "WeightPVBand", "WeightPVBL2", "StepSize",
@@ -76,6 +77,7 @@ class CurvILTCfg:
         assert self._config["MoreauLambdaDecay"] > 0.0, "[CurvILT]: MoreauLambdaDecay must be positive."
         assert self._config["MoreauLambdaMin"] > 0.0, "[CurvILT]: MoreauLambdaMin must be positive."
         assert self._config["MoreauRandomInitZStd"] >= 0.0, "[CurvILT]: MoreauRandomInitZStd must be non-negative."
+        assert self._config["MoreauK"] >= 1, "[CurvILT]: MoreauK must be at least 1."
 
     def __getitem__(self, key):
         return self._config[key]
@@ -143,6 +145,7 @@ class CurvILT:
         moreau_beta = self._config["MoreauBeta"]
         moreau_lambda_decay = self._config["MoreauLambdaDecay"]
         moreau_lambda_min = self._config["MoreauLambdaMin"]
+        moreau_k = self._config["MoreauK"]
         u = params.clone().detach().requires_grad_(True)
         if init_z is not None:
             if not isinstance(init_z, torch.Tensor):
@@ -152,7 +155,7 @@ class CurvILT:
             z = params.clone().detach() + self._config["MoreauRandomInitZStd"] * torch.randn_like(params)
         else:
             z = 0.5*torch.ones_like(params)
-            # z = params.clone().detach() - 0.5
+            # z = params.clone().detach()
 
         # Optimizer
         opt = optim.SGD([u], lr=self._config["StepSize"])
@@ -206,11 +209,13 @@ class CurvILT:
             opt.zero_grad()
             total_loss.backward()
             opt.step()
+            should_update_z = ((idx + 1) % moreau_k == 0) or (idx == self._config["Iterations"] - 1)
             with torch.no_grad():
-                z = (1.0 - moreau_beta) * z + moreau_beta * u.detach()
+                if should_update_z:
+                    z = (1.0 - moreau_beta) * z + moreau_beta * u.detach()
+                    moreau_lambda = max(moreau_lambda_min, moreau_lambda * moreau_lambda_decay)
                 if history is not None:
                     history["u_z_distance"].append(torch.norm(u.detach() - z).item())
-            moreau_lambda = max(moreau_lambda_min, moreau_lambda * moreau_lambda_decay)
 
         final_z = z.detach().clone()
         if history is not None:
