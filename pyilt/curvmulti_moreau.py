@@ -108,7 +108,7 @@ class CurvILT:
 
     def _base_objective(self, mask, target):
         printedNom, printedMax, printedMin = self._lithosim(mask)
-        l2loss = func.mse_loss(printedMax, target, reduction="sum")
+        l2loss = func.mse_loss(printedNom, target, reduction="sum") # func.mse_loss(printedMax, target, reduction="sum")
         pvbl2 = func.mse_loss(printedMax, target, reduction="sum") + func.mse_loss(printedMin, target, reduction="sum")
         pvbloss = func.mse_loss(printedMax, printedMin, reduction="sum")
         pvband = torch.sum((printedMax >= self._config["TargetDensity"]) != (printedMin >= self._config["TargetDensity"]))

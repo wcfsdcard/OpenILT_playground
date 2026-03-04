@@ -1,10 +1,10 @@
-Iterations 200
+Iterations 400
 TargetDensity 0.225
-SigmoidSteepness 10.0
+SigmoidSteepness 20.0
 SigmoidOffset 0.5
 WeightEPE 0.0
-WeightPVBL2 0.0
-WeightPVBand 1.0
+WeightPVBL2 1.0
+WeightPVBand 0.0
 StepSize 0.5
 MoreauLambda 25.0
 MoreauBeta 1
