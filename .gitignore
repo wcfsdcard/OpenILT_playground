@@ -12,3 +12,5 @@ tmp/
 *.png
 
 plots/
+
+external_reference/
