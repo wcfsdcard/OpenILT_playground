@@ -7,6 +7,7 @@ import cv2
 import torch
 
 from pycommon.settings import DEVICE, REALTYPE
+import pyilt.evaluation as evaluation
 import pylitho.exact as openilt_litho
 import pylitho.tcc_eval as tcc_litho
 
@@ -102,7 +103,10 @@ def evaluate_metrics(mask, target, litho, center_size=None, threshold=0.5):
 
         l2 = torch.sum((nominal_eval - target_eval) ** 2).item()
         pvb = torch.sum(max_eval != min_eval).item()
-    return l2, pvb
+        vposes, hposes = evaluation.boundaries(target_eval)
+        epe_in, epe_out, _ = evaluation.epecheck(nominal_eval, target_eval, vposes, hposes)
+        epe = epe_in + epe_out
+    return l2, pvb, epe
 
 
 def main():
@@ -142,15 +146,18 @@ def main():
                 mask, (target.shape[1], target.shape[0]), interpolation=cv2.INTER_NEAREST
             )
 
-        openilt_l2, openilt_pvb = evaluate_metrics(mask, target, openilt, args.center_size)
-        tcc_l2, tcc_pvb = evaluate_metrics(mask, target, tcc, args.center_size)
+        openilt_l2, openilt_pvb, openilt_epe = evaluate_metrics(
+            mask, target, openilt, args.center_size
+        )
+        tcc_l2, tcc_pvb, tcc_epe = evaluate_metrics(mask, target, tcc, args.center_size)
         delta_l2 = tcc_l2 - openilt_l2
         delta_pvb = tcc_pvb - openilt_pvb
+        delta_epe = tcc_epe - openilt_epe
 
         print(
-            f"[{testcase}] OpenILT: L2 {openilt_l2:.0f}; PVBand {openilt_pvb:.0f} | "
-            f"TCC: L2 {tcc_l2:.0f}; PVBand {tcc_pvb:.0f} | "
-            f"Delta: L2 {delta_l2:+.0f}; PVBand {delta_pvb:+.0f}"
+            f"[{testcase}] OpenILT: L2 {openilt_l2:.0f}; PVBand {openilt_pvb:.0f}; EPE {openilt_epe:.0f} | "
+            f"TCC: L2 {tcc_l2:.0f}; PVBand {tcc_pvb:.0f}; EPE {tcc_epe:.0f} | "
+            f"Delta: L2 {delta_l2:+.0f}; PVBand {delta_pvb:+.0f}; EPE {delta_epe:+.0f}"
         )
 
         rows.append(
@@ -158,10 +165,13 @@ def main():
                 testcase,
                 openilt_l2,
                 openilt_pvb,
+                openilt_epe,
                 tcc_l2,
                 tcc_pvb,
+                tcc_epe,
                 delta_l2,
                 delta_pvb,
+                delta_epe,
             )
         )
 
@@ -175,10 +185,13 @@ def main():
                     "testcase",
                     "openilt_l2",
                     "openilt_pvband",
+                    "openilt_epe",
                     "tcc_l2",
                     "tcc_pvband",
+                    "tcc_epe",
                     "delta_l2",
                     "delta_pvband",
+                    "delta_epe",
                 ]
             )
             for row in rows:
@@ -189,8 +202,11 @@ def main():
                         f"{row[2]:.0f}",
                         f"{row[3]:.0f}",
                         f"{row[4]:.0f}",
-                        f"{row[5]:+.0f}",
-                        f"{row[6]:+.0f}",
+                        f"{row[5]:.0f}",
+                        f"{row[6]:.0f}",
+                        f"{row[7]:+.0f}",
+                        f"{row[8]:+.0f}",
+                        f"{row[9]:+.0f}",
                     ]
                 )
 
