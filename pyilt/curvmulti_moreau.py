@@ -66,7 +66,8 @@ class CurvILTCfg:
         self._config.setdefault("MoreauRandomInitZ", 0)
         self._config.setdefault("MoreauRandomInitZStd", 1.0)
         self._config.setdefault("MoreauK", 1)
-        intfields = ["Iterations", "TileSizeX", "TileSizeY", "OffsetX", "OffsetY", "ILTSizeX", "ILTSizeY", "MoreauRandomInitZ", "MoreauK"]
+        self._config.setdefault("MoreauEnable", 1)
+        intfields = ["Iterations", "TileSizeX", "TileSizeY", "OffsetX", "OffsetY", "ILTSizeX", "ILTSizeY", "MoreauRandomInitZ", "MoreauK", "MoreauEnable"]
         for key in intfields:
             self._config[key] = int(self._config[key])
         floatfields = ["TargetDensity", "SigmoidSteepness", "SigmoidOffset", "WeightEPE", "WeightPVBand", "WeightPVBL2", "StepSize",
@@ -78,6 +79,7 @@ class CurvILTCfg:
         assert self._config["MoreauLambdaMin"] > 0.0, "[CurvILT]: MoreauLambdaMin must be positive."
         assert self._config["MoreauRandomInitZStd"] >= 0.0, "[CurvILT]: MoreauRandomInitZStd must be non-negative."
         assert self._config["MoreauK"] >= 1, "[CurvILT]: MoreauK must be at least 1."
+        assert self._config["MoreauEnable"] in [0, 1], "[CurvILT]: MoreauEnable must be 0 or 1."
 
     def __getitem__(self, key):
         return self._config[key]
@@ -108,7 +110,7 @@ class CurvILT:
 
     def _base_objective(self, mask, target):
         printedNom, printedMax, printedMin = self._lithosim(mask)
-        l2loss = func.mse_loss(printedNom, target, reduction="sum") # func.mse_loss(printedMax, target, reduction="sum")
+        l2loss = func.mse_loss(printedMax, target, reduction="sum")
         pvbl2 = func.mse_loss(printedMax, target, reduction="sum") + func.mse_loss(printedMin, target, reduction="sum")
         pvbloss = func.mse_loss(printedMax, printedMin, reduction="sum")
         pvband = torch.sum((printedMax >= self._config["TargetDensity"]) != (printedMin >= self._config["TargetDensity"]))
@@ -146,8 +148,11 @@ class CurvILT:
         moreau_lambda_decay = self._config["MoreauLambdaDecay"]
         moreau_lambda_min = self._config["MoreauLambdaMin"]
         moreau_k = self._config["MoreauK"]
+        use_moreau = bool(self._config["MoreauEnable"])
         u = params.clone().detach().requires_grad_(True)
-        if init_z is not None:
+        if not use_moreau:
+            z = params.clone().detach()
+        elif init_z is not None:
             if not isinstance(init_z, torch.Tensor):
                 init_z = torch.tensor(init_z, dtype=REALTYPE, device=self._device)
             z = init_z.clone().detach()
@@ -183,7 +188,10 @@ class CurvILT:
         for idx in range(self._config["Iterations"]):
             mask_u = self._mask_from_logits(u)
             objective_u = self._base_objective(mask_u, target)
-            moreau_coupling = 0.5 / moreau_lambda * torch.sum((u - z.detach()) ** 2)
+            if use_moreau:
+                moreau_coupling = 0.5 / moreau_lambda * torch.sum((u - z.detach()) ** 2)
+            else:
+                moreau_coupling = torch.zeros((), dtype=REALTYPE, device=self._device)
             total_loss = objective_u["base_total"] + moreau_coupling
             if verbose == 1:
                 print(f"[Iteration {idx}]: L2 = {objective_u['l2loss'].item():.0f}; PVBand: {objective_u['pvband'].item():.0f}")
@@ -195,7 +203,7 @@ class CurvILT:
                 history["u_weighted_pvbloss"].append(objective_u["weighted_pvbloss"].item())
                 history["u_weighted_curv"].append(objective_u["weighted_curv"].item())
                 history["moreau_coupling"].append(moreau_coupling.item())
-                history["moreau_lambda"].append(moreau_lambda)
+                history["moreau_lambda"].append(moreau_lambda if use_moreau else 0.0)
 
             if objective_u["base_total"].item() < best_loss:
                 best_loss = objective_u["base_total"].item()
@@ -209,11 +217,12 @@ class CurvILT:
             opt.zero_grad()
             total_loss.backward()
             opt.step()
-            should_update_z = ((idx + 1) % moreau_k == 0) or (idx == self._config["Iterations"] - 1)
             with torch.no_grad():
-                if should_update_z:
+                if use_moreau and (((idx + 1) % moreau_k == 0) or (idx == self._config["Iterations"] - 1)):
                     z = (1.0 - moreau_beta) * z + moreau_beta * u.detach()
                     moreau_lambda = max(moreau_lambda_min, moreau_lambda * moreau_lambda_decay)
+                elif not use_moreau:
+                    z = u.detach().clone()
                 if history is not None:
                     history["u_z_distance"].append(torch.norm(u.detach() - z).item())
 
