@@ -1,7 +1,9 @@
 import sys
 sys.path.append(".")
+import argparse
 import time
 import math
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -16,7 +18,8 @@ import pycommon.utils as common
 import pycommon.glp as glp
 # import pylitho.simple as lithosim
 # import pylitho.exact as lithosim
-import pylitho.exact2 as lithosim
+import pylitho.exact2 as exact2_lithosim
+import pylitho.tcc_eval as tcc_lithosim
 
 import pyilt.initializer as initializer
 import pyilt.evaluation as evaluation
@@ -46,12 +49,90 @@ class NewCfg:
     def __getitem__(self, key): 
         return self._config[key]
 
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Run Pixel2ndILT with either the default OpenILT kernels or external TCC kernels."
+    )
+    parser.add_argument(
+        "--litho-kernel-source",
+        choices=["openilt", "tcc"],
+        default="openilt",
+        help="Lithography kernel source to use during optimization and evaluation (default: openilt).",
+    )
+    parser.add_argument(
+        "--litho-config",
+        default="./config/lithosimple.txt",
+        help="Lithography simulator config path (default: ./config/lithosimple.txt).",
+    )
+    parser.add_argument(
+        "--tcc-kernel-path",
+        default=None,
+        help="Optional TCC kernel npy path. Defaults to <repo>/external_references/tcc/optKernel_bc.npy or <repo>/external_reference/tcc/optKernel_bc.npy.",
+    )
+    parser.add_argument(
+        "--tcc-scale-path",
+        default=None,
+        help="Optional TCC scale npy path. Defaults to <repo>/external_references/tcc/optKernel_scale.npy or <repo>/external_reference/tcc/optKernel_scale.npy.",
+    )
+    return parser.parse_args()
+
+
+def resolve_repo_root():
+    return Path(__file__).resolve().parents[1]
+
+
+def resolve_repo_path(repo_root, path):
+    path = Path(path)
+    if path.is_absolute():
+        return path
+    return repo_root / path
+
+
+def resolve_tcc_dir(repo_root):
+    candidates = [
+        repo_root / "external_references" / "tcc",
+        repo_root / "external_reference" / "tcc",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(
+        "Could not find a TCC directory at "
+        f"{candidates[0]} or {candidates[1]}."
+    )
+
+
+def build_lithosim(args, repo_root):
+    config_path = resolve_repo_path(repo_root, args.litho_config)
+    if args.litho_kernel_source == "tcc":
+        tcc_dir = resolve_tcc_dir(repo_root)
+        kernel_path = (
+            resolve_repo_path(repo_root, args.tcc_kernel_path)
+            if args.tcc_kernel_path
+            else tcc_dir / "optKernel_bc.npy"
+        )
+        scale_path = (
+            resolve_repo_path(repo_root, args.tcc_scale_path)
+            if args.tcc_scale_path
+            else tcc_dir / "optKernel_scale.npy"
+        )
+        return tcc_lithosim.TCCLithoSim(
+            str(config_path), kernel_path=str(kernel_path), scale_path=str(scale_path)
+        )
+    return exact2_lithosim.LithoSim(str(config_path))
+
+
 class NewILT: 
-    def __init__(self, config=NewCfg("./config/pixelilt512.txt"), lithosim=lithosim.LithoSim("./config/lithosimple.txt"), device=DEVICE, multigpu=False): 
+    def __init__(self, config=None, lithosim=None, device=DEVICE, multigpu=False): 
         super(NewILT, self).__init__()
+        if config is None:
+            config = NewCfg("./config/pixelilt512.txt")
         self._config = config
         self._device = device
         # Lithosim
+        if lithosim is None:
+            lithosim = exact2_lithosim.LithoSim("./config/lithosimple.txt")
         self._lithosim = lithosim.to(DEVICE)
         if multigpu: 
             self._lithosim = nn.DataParallel(self._lithosim)
@@ -189,7 +270,8 @@ class NewILT:
         
         return l2Best, pvbBest, bestParams, bestMask
 
-def serial(): 
+
+def serial(args): 
     SCALE = 4
     l2s = []
     pvbs = []
@@ -197,8 +279,10 @@ def serial():
     shots = []
     nilses = []
     runtimes = []
+    repo_root = resolve_repo_root()
     cfg   = NewCfg("./config/pixelilt512.txt")
-    litho = lithosim.LithoSim("./config/lithosimple.txt")
+    litho = build_lithosim(args, repo_root)
+    print(f"[LithoSim] Using {args.litho_kernel_source} kernels.")
     solver = NewILT(cfg, litho)
     test = evaluation.Basic(litho, 0.5)
     epeCheck = evaluation.EPEChecker(litho, 0.5)
@@ -238,7 +322,7 @@ def serial():
 
 
 if __name__ == "__main__": 
-    serial()
+    serial(parse_args())
 
 '''
 [Testcase 1]: L2 36271; PVBand 47102; EPE 3; Shot: -1; NILS 103.3; SolveTime: 4.35s

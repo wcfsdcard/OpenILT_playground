@@ -1,0 +1,18 @@
+Iterations 200
+TargetDensity 0.225
+SigmoidSteepness 4.0
+SigmoidOffset 0.5
+WeightNom 0.0
+WeightMin 0.0
+WeightMax 1.0
+WeightPVBand 1.0
+WeightCurv 1.0
+StepSize 0.5
+UpdateHess 16
+
+TileSizeX 512
+TileSizeY 512
+OffsetX   96
+OffsetY   96
+ILTSizeX  320
+ILTSizeY  320
