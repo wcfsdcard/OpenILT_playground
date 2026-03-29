@@ -6,6 +6,7 @@ from pathlib import Path
 import cv2
 import torch
 
+import neuralilt_epe_checker
 from pycommon.settings import DEVICE, REALTYPE
 import pyilt.evaluation as evaluation
 import pylitho.exact as openilt_litho
@@ -50,6 +51,24 @@ def parse_args():
         help="Optional centered crop size for metric computation.",
     )
     parser.add_argument(
+        "--epe-checker",
+        choices=["openilt", "neuralilt"],
+        default="openilt",
+        help="EPE checker to use for both simulators (default: openilt).",
+    )
+    parser.add_argument(
+        "--neuralilt-epe-threshold",
+        type=int,
+        default=15,
+        help="EPE threshold passed to neuralilt_epe_checker (default: 15).",
+    )
+    parser.add_argument(
+        "--neuralilt-check-stepsize",
+        type=int,
+        default=40,
+        help="Checkpoint spacing passed to neuralilt_epe_checker (default: 40).",
+    )
+    parser.add_argument(
         "--csv-path",
         default=None,
         help="Optional output CSV path for side-by-side metrics.",
@@ -83,7 +102,20 @@ def center_crop(tensor, size):
     return tensor[..., start_h : start_h + size, start_w : start_w + size]
 
 
-def evaluate_metrics(mask, target, litho, center_size=None, threshold=0.5):
+def to_binary_uint8(image):
+    return (image >= 0.5).astype("uint8") * 255
+
+
+def evaluate_metrics(
+    mask,
+    target,
+    litho,
+    center_size=None,
+    threshold=0.5,
+    epe_checker="openilt",
+    neuralilt_epe_threshold=15,
+    neuralilt_check_stepsize=40,
+):
     if not isinstance(mask, torch.Tensor):
         mask = torch.tensor(mask, dtype=REALTYPE, device=DEVICE)
     if not isinstance(target, torch.Tensor):
@@ -108,9 +140,21 @@ def evaluate_metrics(mask, target, litho, center_size=None, threshold=0.5):
 
         l2 = torch.sum((nominal_eval - target_eval) ** 2).item()
         pvb = torch.sum(max_eval != min_eval).item()
-        vposes, hposes = evaluation.boundaries(target_eval)
-        epe_in, epe_out, _ = evaluation.epecheck(nominal_eval, target_eval, vposes, hposes)
-        epe = epe_in + epe_out
+        if epe_checker == "openilt":
+            vposes, hposes = evaluation.boundaries(target_eval)
+            epe_in, epe_out, _ = evaluation.epecheck(
+                nominal_eval, target_eval, vposes, hposes
+            )
+            epe = epe_in + epe_out
+        else:
+            layout = to_binary_uint8(target_eval.detach().cpu().numpy())
+            wafer = (nominal_eval.detach().cpu().numpy().astype("uint8")) * 255
+            checkpoints = neuralilt_epe_checker.get_epe_checkpoints(
+                layout, check_stepsize=neuralilt_check_stepsize
+            )
+            epe, _ = neuralilt_epe_checker.calc_epe_violations(
+                wafer, checkpoints, epe_threshold=neuralilt_epe_threshold
+            )
     return l2, pvb, epe
 
 
@@ -156,9 +200,23 @@ def main():
             )
 
         openilt_l2, openilt_pvb, openilt_epe = evaluate_metrics(
-            mask, target, openilt, args.center_size
+            mask,
+            target,
+            openilt,
+            args.center_size,
+            epe_checker=args.epe_checker,
+            neuralilt_epe_threshold=args.neuralilt_epe_threshold,
+            neuralilt_check_stepsize=args.neuralilt_check_stepsize,
         )
-        tcc_l2, tcc_pvb, tcc_epe = evaluate_metrics(mask, target, tcc, args.center_size)
+        tcc_l2, tcc_pvb, tcc_epe = evaluate_metrics(
+            mask,
+            target,
+            tcc,
+            args.center_size,
+            epe_checker=args.epe_checker,
+            neuralilt_epe_threshold=args.neuralilt_epe_threshold,
+            neuralilt_check_stepsize=args.neuralilt_check_stepsize,
+        )
         delta_l2 = tcc_l2 - openilt_l2
         delta_pvb = tcc_pvb - openilt_pvb
         delta_epe = tcc_epe - openilt_epe

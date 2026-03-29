@@ -6,6 +6,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+import neuralilt_epe_checker
 import pyilt.evaluation as evaluation
 import pylitho.exact as lithosim
 
@@ -18,6 +19,24 @@ def parse_args():
         "--csv-path",
         default=None,
         help="Output CSV path (default: <repo>/data/eval/m1_iccad_eval.csv).",
+    )
+    parser.add_argument(
+        "--epe-checker",
+        choices=["openilt", "neuralilt"],
+        default="openilt",
+        help="EPE checker to use (default: openilt).",
+    )
+    parser.add_argument(
+        "--neuralilt-epe-threshold",
+        type=int,
+        default=15,
+        help="EPE threshold passed to neuralilt_epe_checker (default: 15).",
+    )
+    parser.add_argument(
+        "--neuralilt-check-stepsize",
+        type=int,
+        default=40,
+        help="Checkpoint spacing passed to neuralilt_epe_checker (default: 40).",
     )
     return parser.parse_args()
 
@@ -35,6 +54,26 @@ def testcase_paths(repo_root: Path, idx: int):
     target_path = base_dir / f"{testcase}.png"
     mask_path = base_dir / f"{testcase}.png.mask_retarget_1_morph_3.png"
     return testcase, target_path, mask_path
+
+
+def to_binary_uint8(image):
+    return (image >= 0.5).astype(np.uint8) * 255
+
+
+def evaluate_with_neuralilt_epe(mask, target, litho, epe_threshold=15, check_stepsize=40):
+    basic = evaluation.Basic(litho, 0.5)
+    l2, pvb = basic.run(mask, target, scale=1)
+    _, binary_nom = basic.sim(mask, target, scale=1)
+
+    layout = to_binary_uint8(target)
+    wafer = (binary_nom.detach().cpu().numpy().astype(np.uint8)) * 255
+    checkpoints = neuralilt_epe_checker.get_epe_checkpoints(
+        layout, check_stepsize=check_stepsize
+    )
+    epe, _ = neuralilt_epe_checker.calc_epe_violations(
+        wafer, checkpoints, epe_threshold=epe_threshold
+    )
+    return l2, pvb, epe, -1
 
 
 def main():
@@ -66,7 +105,16 @@ def main():
                 mask, (target.shape[1], target.shape[0]), interpolation=cv2.INTER_NEAREST
             )
 
-        l2, pvb, epe, shot = evaluation.evaluate(mask, target, litho, scale=1, shots=False)
+        if args.epe_checker == "openilt":
+            l2, pvb, epe, shot = evaluation.evaluate(mask, target, litho, scale=1, shots=False)
+        else:
+            l2, pvb, epe, shot = evaluate_with_neuralilt_epe(
+                mask,
+                target,
+                litho,
+                epe_threshold=args.neuralilt_epe_threshold,
+                check_stepsize=args.neuralilt_check_stepsize,
+            )
 
         print(
             f"[{testcase}]: L2 {l2:.0f}; PVBand {pvb:.0f}; EPE {epe:.0f}; Shot {shot:.0f}"
