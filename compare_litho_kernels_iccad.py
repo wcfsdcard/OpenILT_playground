@@ -39,6 +39,11 @@ def parse_args():
         help="TCC scale npy path (default: <repo>/external_reference/tcc/optKernel_scale.npy).",
     )
     parser.add_argument(
+        "--transpose-tcc",
+        action="store_true",
+        help="Transpose the TCC kernels along x/y before simulation.",
+    )
+    parser.add_argument(
         "--center-size",
         type=int,
         default=None,
@@ -130,6 +135,10 @@ def main():
         kernel_path=str(tcc_kernel_path),
         scale_path=str(tcc_scale_path),
     ).to(DEVICE)
+    if args.transpose_tcc:
+        with torch.no_grad():
+            tcc._focus_kernel.copy_(tcc._focus_kernel.transpose(-2, -1).contiguous())
+            tcc._defocus_kernel.copy_(tcc._defocus_kernel.transpose(-2, -1).contiguous())
 
     rows = []
     for idx in args.indices:
@@ -156,7 +165,7 @@ def main():
 
         print(
             f"[{testcase}] OpenILT: L2 {openilt_l2:.0f}; PVBand {openilt_pvb:.0f}; EPE {openilt_epe:.0f} | "
-            f"TCC: L2 {tcc_l2:.0f}; PVBand {tcc_pvb:.0f}; EPE {tcc_epe:.0f} | "
+            f"Haoyu's{'(xy^T)' if args.transpose_tcc else ''}: L2 {tcc_l2:.0f}; PVBand {tcc_pvb:.0f}; EPE {tcc_epe:.0f} | "
             f"Delta: L2 {delta_l2:+.0f}; PVBand {delta_pvb:+.0f}; EPE {delta_epe:+.0f}"
         )
 

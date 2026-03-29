@@ -35,6 +35,11 @@ def parse_args():
         help="TCC scale npy path (default: <repo>/external_reference/tcc/optKernel_scale.npy).",
     )
     parser.add_argument(
+        "--transpose-tcc",
+        action="store_true",
+        help="Transpose the TCC kernels along x/y before visualization.",
+    )
+    parser.add_argument(
         "--kernel-num",
         type=int,
         default=24,
@@ -165,6 +170,8 @@ def main():
         else repo_root / "data" / "eval" / "kernel_diff_visuals"
     )
     output_dir.mkdir(parents=True, exist_ok=True)
+    tcc_label = "tcc_xyT" if args.transpose_tcc else "tcc"
+    tcc_title = "TCC (xy^T)" if args.transpose_tcc else "TCC"
 
     for family in ["focus", "defocus"]:
         openilt_kernels, openilt_scales = load_openilt_family(
@@ -173,6 +180,8 @@ def main():
         tcc_kernels, tcc_scales = load_tcc_family(
             tcc_kernel_path, tcc_scale_path, family, args.kernel_num
         )
+        if args.transpose_tcc:
+            tcc_kernels = np.swapaxes(tcc_kernels, -2, -1)
 
         openilt_layers, component_cmap, component_label = component_layers(
             openilt_kernels, args.component
@@ -197,24 +206,24 @@ def main():
             openilt_vmax,
         )
         save_layer_grid(
-            output_dir / f"{family}_tcc_{component_label}_layers.png",
+            output_dir / f"{family}_{tcc_label}_{component_label}_layers.png",
             family,
-            f"TCC {component_label} layers",
+            f"{tcc_title} {component_label} layers",
             tcc_layers,
             component_cmap,
             tcc_vmin,
             tcc_vmax,
         )
         save_layer_grid(
-            output_dir / f"{family}_{diff_label}_layers.png",
+            output_dir / f"{family}_{diff_label}_{tcc_label}.png",
             family,
-            f"{diff_label} layers",
+            f"{diff_label} layers vs {tcc_title}",
             diff_layer_values,
             diff_cmap,
             diff_vmin,
             diff_vmax,
         )
-        save_scale_plot(output_dir / f"{family}_scales.png", family, openilt_scales, tcc_scales)
+        save_scale_plot(output_dir / f"{family}_scales_{tcc_label}.png", family, openilt_scales, tcc_scales)
 
     print(f"Wrote kernel comparison figures to {output_dir}")
 
