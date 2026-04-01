@@ -73,8 +73,9 @@ class TCCLithoSim(nn.Module):
         self.register_buffer("_defocus_kernel", defocus_kernel)
         self.register_buffer("_focus_scale", focus_scale)
         self.register_buffer("_defocus_scale", defocus_scale)
+        self._saved = None
 
-    def _simulate_corner(self, mask, dose, kernels, scales):
+    def _simulate_aerial(self, mask, dose, kernels, scales):
         added_batch = False
         if len(mask.shape) == 2:
             mask = mask[None, None, :, :]
@@ -104,22 +105,31 @@ class TCCLithoSim(nn.Module):
         fields = torch.fft.ifft2(fields)
         intensity = torch.abs(fields) ** 2
         aerial = torch.sum(intensity * scales.view(1, kernel_num, 1, 1), dim=1)
-        printed = torch.sigmoid(
-            self._config["PrintSteepness"] * (aerial - self._config["TargetDensity"])
-        )
 
         if added_batch:
-            return printed[0]
-        return printed
+            return aerial[0]
+        return aerial
 
     def forward(self, mask):
-        printed_nom = self._simulate_corner(
+        aerial_nom = self._simulate_aerial(
             mask, self._config["DoseNom"], self._focus_kernel, self._focus_scale
         )
-        printed_max = self._simulate_corner(
-            mask, self._config["DoseMax"], self._focus_kernel, self._focus_scale
+        aerial_defocus_nom = self._simulate_aerial(
+            mask, self._config["DoseNom"], self._defocus_kernel, self._defocus_scale
         )
-        printed_min = self._simulate_corner(
-            mask, self._config["DoseMin"], self._defocus_kernel, self._defocus_scale
+
+        aerial_max = aerial_nom * (self._config["DoseMax"] / self._config["DoseNom"]) ** 2
+        aerial_min = aerial_defocus_nom * (self._config["DoseMin"] / self._config["DoseNom"]) ** 2
+
+        printed_nom = torch.sigmoid(
+            self._config["PrintSteepness"] * (aerial_nom - self._config["TargetDensity"])
         )
+        printed_max = torch.sigmoid(
+            self._config["PrintSteepness"] * (aerial_max - self._config["TargetDensity"])
+        )
+        printed_min = torch.sigmoid(
+            self._config["PrintSteepness"] * (aerial_min - self._config["TargetDensity"])
+        )
+
+        self._saved = aerial_nom, aerial_max, aerial_min
         return printed_nom, printed_max, printed_min

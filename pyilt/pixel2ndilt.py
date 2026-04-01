@@ -263,8 +263,8 @@ class NewILT:
             # preconditioned = (gradP / bias_correction1 / denom).detach().clamp(max=1.0)
 
             # Sign SGD: apply sign() to preconditioned gradient
-            # params.grad = preconditioned.sign()
-            params.grad = preconditioned
+            params.grad = preconditioned.sign()
+            # params.grad = preconditioned
             opt.step()
             opt.zero_grad()
         
@@ -303,7 +303,7 @@ def serial(args):
         epeIn, epeOut = epeCheck.run(bestMask, target, scale=SCALE)
         epe = epeIn + epeOut
         shot = -1 # shotCount.run(bestMask, shape=(512, 512))
-        nils = evaluation.nils(bestMask, target, litho, scale=SCALE)
+        nils = -1 # evaluation.nils(bestMask, target, litho, scale=SCALE)
         mask, resist = test.sim(bestMask, target, scale=SCALE)
         cv2.imwrite(f"./tmp/Pixel2ndILT_target{idx}.png", (target * 255).detach().cpu().numpy(), (cfg["TileSizeX"]*SCALE, cfg["TileSizeY"]*SCALE))
         cv2.imwrite(f"./tmp/Pixel2ndILT_mask{idx}.png", (bestMask * 255).detach().cpu().numpy(), (cfg["TileSizeX"]*SCALE, cfg["TileSizeY"]*SCALE))
